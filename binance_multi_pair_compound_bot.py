@@ -13,8 +13,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-API_KEY = os.getenv("BINANCE_API_KEY")
-API_SECRET = os.getenv("BINANCE_API_SECRET")
+API_KEY = os.getenv("YrmVq9oV24FwbtxdzTG0Wg4slA248moV18vTXfwIP91yrKKDQJkf5BQaWiD1x3mY")
+API_SECRET = os.getenv("KrPWIn7tJvwwwRFLD60t7EX5yQ0ueleoN7bkWfXx92tQy8Lixz91ROOP7vLwyaXE")
 TRADING_PAIRS = os.getenv("TRADING_PAIRS", "BTC/USDT,ETH/USDT").split(",")
 LEVERAGE = int(os.getenv("LEVERAGE", 5))
 RISK_PER_TRADE = float(os.getenv("RISK_PER_TRADE", 0.01))
