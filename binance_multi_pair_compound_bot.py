@@ -1,76 +1,87 @@
-"""
-Binance Multi-Pair Compound Trading Bot
-Author: ChatGPT
-Description: Live trading bot for Binance Futures with multiple trading pairs.
-WARNING: Trading is risky. Use at your own risk.
-"""
-
-import os
-import time
+# main.py
 import ccxt
-import pandas as pd
-from dotenv import load_dotenv
+import time
+import math
 
-load_dotenv()
+# === HARD-CODED KEYS (you asked) ===
+API_KEY = "YrmVq9oV24FwbtxdzTG0Wg4slA248moV18vTXfwIP91yrKKDQJkf5BQaWiD1x3mY"
+API_SECRET = "KrPWIn7tJvwwwRFLD60t7EX5yQ0ueleoN7bkWfXx92tQy8Lixz91ROOP7vLwyaXE"
 
-API_KEY = os.getenv("YrmVq9oV24FwbtxdzTG0Wg4slA248moV18vTXfwIP91yrKKDQJkf5BQaWiD1x3mY")
-API_SECRET = os.getenv("KrPWIn7tJvwwwRFLD60t7EX5yQ0ueleoN7bkWfXx92tQy8Lixz91ROOP7vLwyaXE")
-TRADING_PAIRS = os.getenv("TRADING_PAIRS", "BTC/USDT,ETH/USDT").split(",")
-LEVERAGE = int(os.getenv("LEVERAGE", 5))
-RISK_PER_TRADE = float(os.getenv("RISK_PER_TRADE", 0.01))
-STOPLOSS_PCT = float(os.getenv("STOPLOSS_PCT", 0.01))
-TAKE_PROFIT_PCT = float(os.getenv("TAKE_PROFIT_PCT", 0.02))
-TIMEFRAME = os.getenv("TIMEFRAME", "5m")
-POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 60))
+# === CONFIG ===
+SYMBOL = "BTC/USDT"         # pair to trade (use uppercase, slash OK for ccxt)
+LEVERAGE = 5                # change as needed (13x is very risky)
+USDT_TO_RISK = 10.0         # USD value to use for this market order (use small amount)
+TEST_ORDER = False          # Set True to only simulate (no create order) - for debugging
 
-exchange = ccxt.binance({
+# === Initialize exchange for USDT-M futures ===
+exchange = ccxt.binanceusdm({
     "apiKey": API_KEY,
     "secret": API_SECRET,
     "enableRateLimit": True,
-    "options": {"defaultType": "future"}
+    "options": {"defaultType": "future"},
 })
 
-def set_leverage(pair, leverage):
+def set_leverage(symbol: str, leverage: int):
+    # symbol needs to be without slash when calling this endpoint, e.g. BTCUSDT
+    sym = symbol.replace("/", "")
     try:
-        market = exchange.market(pair)
-        exchange.fapiPrivate_post_leverage({"symbol": market["id"], "leverage": leverage})
-        print(f"Leverage set to {leverage}x for {pair}")
+        exchange.fapiPrivate_post_leverage({"symbol": sym, "leverage": int(leverage)})
+        print(f"[OK] Leverage set to {leverage}x for {sym}")
     except Exception as e:
-        print(f"Error setting leverage for {pair}: {e}")
+        print(f"[WARN] Could not set leverage for {sym}: {e}")
 
-def get_signal(df):
-    if df["close"].iloc[-1] > df["close"].iloc[-2]:
-        return "buy"
-    elif df["close"].iloc[-1] < df["close"].iloc[-2]:
-        return "sell"
-    return None
+def truncate_qty(symbol: str, qty: float):
+    # try to respect market precision
+    markets = exchange.load_markets()
+    m = markets.get(symbol)
+    if not m:
+        return qty
+    prec = m.get("precision", {}).get("amount")
+    if prec is None:
+        return qty
+    factor = 10 ** prec
+    return math.floor(qty * factor) / factor
 
-def place_order(pair, side, amount):
-    try:
-        order = exchange.create_market_order(pair, side, amount)
-        print(f"Order placed: {side} {amount} {pair}")
-        return order
-    except Exception as e:
-        print(f"Error placing order: {e}")
+def place_market_long(symbol: str, usdt_amount: float):
+    # fetch price
+    ticker = exchange.fetch_ticker(symbol)
+    price = float(ticker["last"])
+    # compute base asset qty = usdt_amount / price  (note: for futures with leverage margin differs,
+    # but creating a market order sized by base qty is okay for small test)
+    qty = usdt_amount / price
+    qty = truncate_qty(symbol, qty)
+    if qty <= 0:
+        raise ValueError("Computed qty <= 0, reduce precision/amount")
+    print(f"Placing market BUY {qty} {symbol} at ~{price} (USDT used ~{usdt_amount})")
+    if TEST_ORDER:
+        print("TEST_ORDER=True -> not placing order (simulation mode)")
         return None
+    order = exchange.create_market_buy_order(symbol, qty)
+    return order
 
-def run_bot():
-    balance = exchange.fetch_balance()
-    usdt_balance = balance["total"]["USDT"]
-    print(f"USDT Balance: {usdt_balance}")
+def main():
+    print("Starting minimal futures market-order script...")
+    # verify credentials by fetching account (will raise if auth missing)
+    try:
+        balance = exchange.fetch_balance()
+        print("Fetched balance snapshot (futures):")
+        print(balance.get("total", {}))
+    except Exception as e:
+        print("Authentication / connectivity error:", e)
+        return
 
-    for pair in TRADING_PAIRS:
-        set_leverage(pair, LEVERAGE)
-        ohlcv = exchange.fetch_ohlcv(pair, TIMEFRAME, limit=3)
-        df = pd.DataFrame(ohlcv, columns=["time", "open", "high", "low", "close", "volume"])
-        signal = get_signal(df)
-        if signal:
-            risk_amount = usdt_balance * RISK_PER_TRADE
-            last_price = df["close"].iloc[-1]
-            amount = round(risk_amount / last_price, 3)
-            place_order(pair, signal, amount)
+    # set leverage (best-effort)
+    set_leverage(SYMBOL, LEVERAGE)
+
+    # Small wait to ensure leverage is applied
+    time.sleep(1)
+
+    try:
+        order = place_market_long(SYMBOL, USDT_TO_RISK)
+        print("Order response:")
+        print(order)
+    except Exception as e:
+        print("Order failed:", e)
 
 if __name__ == "__main__":
-    while True:
-        run_bot()
-        time.sleep(POLL_INTERVAL)
+    main()
